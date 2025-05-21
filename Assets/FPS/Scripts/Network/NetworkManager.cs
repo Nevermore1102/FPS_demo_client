@@ -2,20 +2,10 @@ using UnityEngine;
 using System;
 using System.Threading.Tasks;
 using System.Net.Sockets;
-using System.Text;
+using Google.Protobuf;
 
 namespace Unity.FPS.Game
 {
-    public enum NetMessageType : uint
-    {
-        HEARTBEAT = 1,
-        LOGIN = 2,
-        LOGOUT = 3,
-        PLAYER_UPDATE = 4,
-        PLAYER_SHOOT = 5,
-        PLAYER_HIT = 6,
-        GAME_STATE = 7
-    }
 
     public class NetworkManager : MonoBehaviour
     {
@@ -119,38 +109,44 @@ namespace Unity.FPS.Game
 
         private async void StartReceiving()
         {
-            byte[] buffer = new byte[1024];
-
             try
             {
                 while (isConnected)
                 {
-                    // 1. 先读8字节消息头
-                    byte[] header = new byte[8];
+                    // 1. 读取4字节消息长度
+                    byte[] lengthBytes = new byte[4];
                     int read = 0;
-                    while (read < 8)
+                    while (read < 4)
                     {
-                        int r = await stream.ReadAsync(header, read, 8 - read);
+                        int r = await stream.ReadAsync(lengthBytes, read, 4 - read);
                         if (r == 0) { Disconnect(); return; }
                         read += r;
                     }
 
-                    // 2. 解析消息头（小端序）
-                    uint msgId = BitConverter.ToUInt32(header, 0);
-                    uint bodySize = BitConverter.ToUInt32(header, 4);
+                    // 2. 解析消息长度（网络字节序）
+                    uint messageLength = BitConverter.ToUInt32(lengthBytes, 0);
+                    messageLength = (uint)System.Net.IPAddress.NetworkToHostOrder((int)messageLength);
+                    // 添加长度检查，防止异常大的消息
+                    if (messageLength > 1024 * 1024) // 限制最大消息大小为1MB
+                    {
+                        Debug.LogError($"消息长度异常: {messageLength} bytes");
+                        Disconnect();
+                        return;
+                    }
 
                     // 3. 读取消息体
-                    byte[] body = new byte[bodySize];
+                    byte[] messageBytes = new byte[messageLength];
                     int bodyRead = 0;
-                    while (bodyRead < bodySize)
+                    while (bodyRead < messageLength)
                     {
-                        int r = await stream.ReadAsync(body, bodyRead, (int)bodySize - bodyRead);
+                        int r = await stream.ReadAsync(messageBytes, bodyRead, (int)messageLength - bodyRead);
                         if (r == 0) { Disconnect(); return; }
                         bodyRead += r;
                     }
 
-                    // 4. 处理消息
-                    HandleMessage(msgId, body);
+                    // 4. 反序列化消息
+                    NetworkMessage message = NetworkMessage.Parser.ParseFrom(messageBytes);
+                    HandleMessage(message);
                 }
             }
             catch (Exception e)
@@ -163,23 +159,22 @@ namespace Unity.FPS.Game
             }
         }
 
-        private void HandleMessage(uint msgId, byte[] body)
+        private void HandleMessage(NetworkMessage message)
         {
-            if (msgId == (uint)NetMessageType.HEARTBEAT)
+            switch (message.MsgId)
             {
-                Debug.Log("收到心跳响应");
-                return;
-            }
-
-            // 如果body是字符串
-            if (body.Length > 0)
-            {
-                string msg = Encoding.UTF8.GetString(body);
-                Debug.Log($"收到消息: {msg}");
-            }
-            else
-            {
-                Debug.Log($"收到消息: type={msgId}, 空消息体");
+                case MessageType.Heartbeat:
+                    Debug.Log("收到心跳响应");
+                    break;
+                case MessageType.PlayerUpdate:
+                    if (message.PlayerUpdate != null)
+                    {
+                        Debug.Log($"收到玩家更新: 位置({message.PlayerUpdate.PositionX}, {message.PlayerUpdate.PositionY}, {message.PlayerUpdate.PositionZ})");
+                    }
+                    break;
+                default:
+                    Debug.Log($"收到未知消息类型: {message.MsgId}");
+                    break;
             }
         }
 
@@ -187,7 +182,14 @@ namespace Unity.FPS.Game
         {
             try
             {
-                await SendMessage(NetMessageType.HEARTBEAT);
+                var message = new NetworkMessage
+                {
+                    MsgId = MessageType.Heartbeat,
+                    Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    Heartbeat = new HeartbeatMessage()
+                };
+
+                await SendMessage(message);
             }
             catch (Exception e)
             {
@@ -196,23 +198,7 @@ namespace Unity.FPS.Game
             }
         }
 
-        private void WriteUInt32BigEndian(byte[] buffer, int offset, uint value)
-        {
-            buffer[offset + 0] = (byte)((value >> 24) & 0xFF);
-            buffer[offset + 1] = (byte)((value >> 16) & 0xFF);
-            buffer[offset + 2] = (byte)((value >> 8) & 0xFF);
-            buffer[offset + 3] = (byte)(value & 0xFF);
-        }
-
-        private void WriteUInt32LittleEndian(byte[] buffer, int offset, uint value)
-        {
-            buffer[offset + 0] = (byte)(value & 0xFF);
-            buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
-            buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
-            buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
-        }
-
-        public async Task SendMessage(NetMessageType msgType, byte[] body = null)
+        public async Task SendMessage(NetworkMessage message)
         {
             if (!isConnected)
             {
@@ -222,23 +208,23 @@ namespace Unity.FPS.Game
 
             try
             {
-                body = body ?? new byte[0];
-                uint msgId = (uint)msgType;
-                uint bodySize = (uint)body.Length;
+                // 1. 序列化消息
+                byte[] messageBytes = message.ToByteArray();
+                
+                // 2. 计算消息长度（网络字节序）
+                uint messageLength = (uint)messageBytes.Length;
+                byte[] lengthBytes = new byte[4];
+                // 手动写入网络字节序（大端序）的uint32
+                lengthBytes[0] = (byte)((messageLength >> 24) & 0xFF);
+                lengthBytes[1] = (byte)((messageLength >> 16) & 0xFF);
+                lengthBytes[2] = (byte)((messageLength >> 8) & 0xFF);
+                lengthBytes[3] = (byte)(messageLength & 0xFF);
 
-                byte[] header = new byte[8];
-                // WriteUInt32BigEndian(header, 0, msgId);
-                // WriteUInt32BigEndian(header, 4, bodySize);
-                WriteUInt32LittleEndian(header, 0, msgId);
-                WriteUInt32LittleEndian(header, 4, bodySize);
+                // 3. 发送消息长度
+                await stream.WriteAsync(lengthBytes, 0, 4);
 
-
-
-                byte[] sendBuffer = new byte[8 + body.Length];
-                Array.Copy(header, 0, sendBuffer, 0, 8);
-                Array.Copy(body, 0, sendBuffer, 8, body.Length);
-
-                await stream.WriteAsync(sendBuffer, 0, sendBuffer.Length);
+                // 4. 发送消息体
+                await stream.WriteAsync(messageBytes, 0, messageBytes.Length);
             }
             catch (Exception e)
             {

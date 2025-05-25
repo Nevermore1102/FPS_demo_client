@@ -16,6 +16,9 @@ namespace Unity.FPS.Game
         [Tooltip("状态文本")]
         public TextMeshProUGUI StatusText;
 
+        [Tooltip("加入按钮")]
+        public Button JoinButton;
+
         private void Start()
         {
             // 初始化按钮事件
@@ -27,6 +30,11 @@ namespace Unity.FPS.Game
             if (DisconnectButton != null)
             {
                 DisconnectButton.onClick.AddListener(OnDisconnectClick);
+            }
+
+            if (JoinButton != null)
+            {
+                JoinButton.onClick.AddListener(OnJoinClick);
             }
 
             // 更新UI状态
@@ -58,6 +66,25 @@ namespace Unity.FPS.Game
             NetworkManager.Instance.Disconnect();
             StatusText.text = "Disconnected";
             UpdateUI();
+        }
+
+        private async void OnJoinClick()
+        {
+            if (NetworkManager.Instance == null)
+            {
+                Debug.LogError("NetworkManager未初始化");
+                return;     
+            }
+
+            try 
+            {
+                await NetworkManager.Instance.SendPlayerLogin();
+                Debug.Log("开始发送登录");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"登录过程中发生错误: {e.Message}");
+            }
         }
 
         private void Update()

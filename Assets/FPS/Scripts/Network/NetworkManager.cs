@@ -37,9 +37,12 @@ namespace Unity.FPS.Game
         public float HeartbeatInterval = 5f;
 
         [Header("玩家信息")]
+        // 添加服务器玩家状态
+        private ServerPlayerState serverPlayerState;
+
         private PlayerCharacterController playerController;
         private Health playerHealth;
-        private uint localPlayerId;
+        public uint localPlayerId = 1;
         private bool isPlayerInitialized = false;
 
         private TcpClient client;
@@ -59,6 +62,9 @@ namespace Unity.FPS.Game
             instance = this;
             DontDestroyOnLoad(gameObject);
 
+            // 初始化服务器玩家状态
+            serverPlayerState = new ServerPlayerState();
+
             // 注册场景加载事件
             SceneManager.sceneLoaded += OnSceneLoaded;
         }
@@ -71,7 +77,12 @@ namespace Unity.FPS.Game
             {
                 playerHealth = playerController.GetComponent<Health>();
             }
+
+
         }
+
+
+
 
         private void Update()
         {
@@ -193,6 +204,16 @@ namespace Unity.FPS.Game
                         Debug.Log($"收到玩家更新: 位置({message.PlayerUpdate.PositionX}, {message.PlayerUpdate.PositionY}, {message.PlayerUpdate.PositionZ})");
                     }
                     break;
+                case MessageType.PlayerAttribute:
+                    Debug.Log("收到玩家属性");
+                    break;
+                case MessageType.PlayerState:
+                    Debug.Log("收到玩家状态");
+                    break;
+                case MessageType.PlayerJoin:
+                    Debug.Log("收到玩家登录回复");
+                    OnPlayerJoin(message);
+                    break;
                 default:
                     Debug.Log($"收到未知消息类型: {message.MsgId}");
                     break;
@@ -266,6 +287,15 @@ namespace Unity.FPS.Game
             if (scene.name == "NewScene_323_test") // 替换为您的游戏场景名称
             {
                 InitializePlayerComponents();
+
+                //若已经登入，则载入数据。
+                if (serverPlayerState.IsConnected)
+                {
+                    //载入数据
+                    playerController.transform.position = serverPlayerState.Position;
+                    playerController.transform.rotation = serverPlayerState.Rotation;
+                    playerHealth.CurrentHealth = serverPlayerState.Health;
+                }
             }
         }
 
@@ -482,6 +512,88 @@ namespace Unity.FPS.Game
             {
                 Debug.LogError($"发送玩家属性更新失败: {e.Message}");
             }
+        }
+
+        //发送玩家登录：发送一个带着playerid的登录消息
+        public async Task SendPlayerLogin()
+        {
+            if (!isConnected)
+            {
+                return;
+            }
+            var message = new NetworkMessage
+            {
+                MsgId = MessageType.PlayerJoin,
+                PlayerId = localPlayerId,
+            };
+            await SendMessage(message);
+        }
+
+        //接受玩家登录回复
+        private void OnPlayerJoin(NetworkMessage message)
+        {
+            try
+            {
+                if (message == null)
+                {
+                    Debug.LogError("登录回复消息为空");
+                    return;
+                }
+
+                if (message.PlayerId != localPlayerId)
+                {
+                    Debug.LogWarning($"收到其他玩家的登录回复: {message.PlayerId}");
+                    return;
+                }
+
+                Debug.Log("玩家登录成功");
+
+                // 检查消息内容
+                if (message.PlayerState == null)
+                {
+                    Debug.LogError("登录回复中缺少PlayerState信息");
+                    return;
+                }
+
+                // 更新服务器玩家状态
+                serverPlayerState.UpdateFromMessage(message);
+                Debug.Log($"服务器玩家状态更新完成:\n{serverPlayerState}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"处理玩家登录回复时发生未预期的错误: {e.Message}\n{e.StackTrace}");
+            }
+        }
+
+        // 添加获取服务器玩家状态的方法
+        public ServerPlayerState GetServerPlayerState()
+        {
+            return serverPlayerState;
+        }
+
+        public UnityEngine.Vector3 GetServerPlayerPosition()
+        {
+            return serverPlayerState?.Position ?? UnityEngine.Vector3.zero;
+        }
+
+        public float GetServerPlayerHealth()
+        {
+            return serverPlayerState?.Health ?? 0f;
+        }
+
+        public Quaternion GetServerPlayerRotation()
+        {
+            return serverPlayerState?.Rotation ?? Quaternion.identity;
+        }
+
+        public UnityEngine.Vector3 GetServerPlayerVelocity()
+        {
+            return serverPlayerState?.Velocity ?? UnityEngine.Vector3.zero;
+        }
+
+        public bool IsServerPlayerGrounded()
+        {
+            return serverPlayerState?.IsGrounded ?? false;
         }
 
         private void OnDestroy()

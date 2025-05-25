@@ -3,6 +3,8 @@ using System;
 using System.Threading.Tasks;
 using System.Net.Sockets;
 using Google.Protobuf;
+using Unity.FPS.Gameplay;
+using UnityEngine.SceneManagement;
 
 namespace Unity.FPS.Game
 {
@@ -34,6 +36,12 @@ namespace Unity.FPS.Game
         [Tooltip("心跳间隔(秒)")]
         public float HeartbeatInterval = 5f;
 
+        [Header("玩家信息")]
+        private PlayerCharacterController playerController;
+        private Health playerHealth;
+        private uint localPlayerId;
+        private bool isPlayerInitialized = false;
+
         private TcpClient client;
         private NetworkStream stream;
         private bool isConnected;
@@ -50,6 +58,19 @@ namespace Unity.FPS.Game
             }
             instance = this;
             DontDestroyOnLoad(gameObject);
+
+            // 注册场景加载事件
+            SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private void Start()
+        {
+            // 获取本地玩家组件
+            playerController = FindFirstObjectByType<PlayerCharacterController>();
+            if (playerController != null)
+            {
+                playerHealth = playerController.GetComponent<Health>();
+            }
         }
 
         private void Update()
@@ -233,8 +254,240 @@ namespace Unity.FPS.Game
             }
         }
 
+        // 场景加载完成时的回调
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            // 重置玩家组件引用
+            isPlayerInitialized = false;
+            playerController = null;
+            playerHealth = null;
+
+            // 如果是游戏场景，尝试初始化玩家组件
+            if (scene.name == "NewScene_323_test") // 替换为您的游戏场景名称
+            {
+                InitializePlayerComponents();
+            }
+        }
+
+        // 初始化玩家组件
+        private void InitializePlayerComponents()
+        {
+            if (isPlayerInitialized) return;
+
+            playerController = FindFirstObjectByType<PlayerCharacterController>();
+            if (playerController != null)
+            {
+                playerHealth = playerController.GetComponent<Health>();
+                isPlayerInitialized = true;
+                Debug.Log("玩家组件初始化成功");
+            }
+            else
+            {
+                Debug.LogWarning("未找到玩家控制器组件");
+            }
+        }
+
+        // 获取玩家位置信息
+        public UnityEngine.Vector3 GetPlayerPosition()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController != null)
+            {
+                return playerController.transform.position;
+            }
+            return UnityEngine.Vector3.zero;
+        }
+
+        // 获取玩家旋转信息
+        public Quaternion GetPlayerRotation()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController != null)
+            {
+                return playerController.transform.rotation;
+            }
+            return Quaternion.identity;
+        }
+
+        // 获取玩家速度信息
+        public UnityEngine.Vector3 GetPlayerVelocity()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController != null)
+            {
+                return playerController.CharacterVelocity;
+            }
+            return UnityEngine.Vector3.zero;
+        }
+
+        // 获取玩家是否在地面上
+        public bool IsPlayerGrounded()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController != null)
+            {
+                return playerController.IsGrounded;
+            }
+            return false;
+        }
+
+        // 获取玩家生命值
+        public float GetPlayerHealth()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerHealth != null)
+            {
+                return playerHealth.CurrentHealth;
+            }
+            return 0f;
+        }
+
+        // 获取玩家最大生命值
+        public float GetPlayerMaxHealth()
+        {
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerHealth != null)
+            {
+                return playerHealth.MaxHealth;
+            }
+            return 0f;
+        }
+
+        // 设置本地玩家ID
+        public void SetLocalPlayerId(uint id)
+        {
+            localPlayerId = id;
+        }
+
+        // 获取本地玩家ID
+        public uint GetLocalPlayerId()
+        {
+            return localPlayerId;
+        }
+
+        // 发送玩家状态更新
+        public async Task SendPlayerStateUpdate()
+        {
+            if (!isConnected)
+            {
+                return;
+            }
+
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var position = GetPlayerPosition();
+                var rotation = GetPlayerRotation();
+                var velocity = GetPlayerVelocity();
+
+                var message = new NetworkMessage
+                {
+                    MsgId = MessageType.PlayerUpdate,
+                    PlayerId = localPlayerId,
+                    Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    PlayerUpdate = new PlayerUpdateMessage
+                    {
+                        PositionX = position.x,
+                        PositionY = position.y,
+                        PositionZ = position.z,
+                        RotationX = rotation.eulerAngles.x,
+                        RotationY = rotation.eulerAngles.y,
+                        RotationZ = rotation.eulerAngles.z,
+                        VelocityX = velocity.x,
+                        VelocityY = velocity.y,
+                        VelocityZ = velocity.z,
+                        IsGrounded = IsPlayerGrounded(),
+                        Health = GetPlayerHealth()
+                    }
+                };
+
+                await SendMessage(message);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"发送玩家状态更新失败: {e.Message}");
+            }
+        }
+
+        // 发送玩家属性更新
+        public async Task SendPlayerAttributeUpdate()
+        {
+            if (!isConnected)
+            {
+                return;
+            }
+
+            if (!isPlayerInitialized)
+            {
+                InitializePlayerComponents();
+            }
+
+            if (playerController == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var message = new NetworkMessage
+                {
+                    MsgId = MessageType.PlayerAttribute,
+                    PlayerId = localPlayerId,
+                    Timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    PlayerAttribute = new PlayerAttributeMessage
+                    {
+                        PlayerId = localPlayerId,
+                        Health = GetPlayerHealth(),
+                        MaxHealth = GetPlayerMaxHealth(),
+                        // 这里可以添加更多属性，比如弹药、武器等
+                    }
+                };
+
+                await SendMessage(message);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"发送玩家属性更新失败: {e.Message}");
+            }
+        }
+
         private void OnDestroy()
         {
+            // 取消注册场景加载事件
+            SceneManager.sceneLoaded -= OnSceneLoaded;
             Disconnect();
         }
     }

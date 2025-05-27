@@ -52,7 +52,20 @@ public class CameraSwitcher : MonoBehaviour
 
     void SetCamera(bool firstPerson)
     {
-        if (firstPersonCamera != null) firstPersonCamera.enabled = firstPerson;
-        if (thirdPersonCamera != null) thirdPersonCamera.enabled = !firstPerson;
+        // if (firstPersonCamera != null) firstPersonCamera.enabled = firstPerson;
+        // if (thirdPersonCamera != null) thirdPersonCamera.enabled = !firstPerson;
+        if (firstPersonCamera != null)
+        {
+            firstPersonCamera.enabled = firstPerson;
+            var listener = firstPersonCamera.GetComponent<AudioListener>();
+            if (listener != null) listener.enabled = firstPerson;
+        }
+        if (thirdPersonCamera != null)
+        {
+            thirdPersonCamera.enabled = !firstPerson;
+            var listener = thirdPersonCamera.GetComponent<AudioListener>();
+            if (listener != null) listener.enabled = !firstPerson;
+        }
+    
     }
 }

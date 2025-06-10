@@ -264,6 +264,9 @@ namespace Unity.FPS.Game
 
                 // 3. 发送消息长度
                 await stream.WriteAsync(lengthBytes, 0, 4);
+                Debug.Log("发送心跳时消息长度：" + messageLength);
+                Debug.Log("发送心跳时消息长度（16进制）：" + BitConverter.ToString(lengthBytes));
+
 
                 // 4. 发送消息体
                 await stream.WriteAsync(messageBytes, 0, messageBytes.Length);
